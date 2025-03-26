@@ -1,0 +1,47 @@
+
+.app-container {
+  font-family: Arial, sans-serif;
+  text-align: center;
+}
+
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0px 20px;
+}
+
+.app-title {
+  margin: 0;
+  font-size: 1.5em;
+  color: #897f52;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+}
+
+.user-name {
+  margin-right: 10px;
+  font-weight: bold;
+  color: #2a2d34;
+}
+
+.close-button {
+  background-color: red;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.close-button:hover {
+  background-color: #cc0000;
+}
+
+
+.profile {
+  width: 40px;   
+}
