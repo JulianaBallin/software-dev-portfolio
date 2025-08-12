@@ -1,0 +1,9 @@
+# Arquivos de ambiente virtual
+.venv/
+venv/
+
+# Arquivos de configuração e segredos
+.env
+
+# Arquivos gerados por editores
+.history/

@@ -8,7 +8,7 @@ packages = [{ include = "src" }]
 
 [tool.poetry.dependencies]
 python = "^3.12"
-asyncua = "^1.1.7"
+asyncua = "^1.1.6"
 gmqtt = "^0.6.13"
 pydantic = "^2.8.2"
 aiosqlite = "^0.20.0"

@@ -1,13 +1,15 @@
+# src/storage.py
 import aiosqlite
+import json
 from typing import Any, Dict
 
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS var_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,
-    path TEXT NOT NULL,     -- caminho da variável no address space (ex.: Motor50CV.Electrical.VoltageA)
+    path TEXT NOT NULL,     -- caminho da variável no address space
     value REAL,
-    extra JSON
+    extra TEXT              -- JSON serializado como string
 );
 
 CREATE TABLE IF NOT EXISTS event_history (
@@ -21,7 +23,7 @@ CREATE TABLE IF NOT EXISTS event_history (
 """
 
 INSERT_VAR_SQL = """
-INSERT INTO var_history (ts, path, value, extra) VALUES (?, ?, ?, json(?));
+INSERT INTO var_history (ts, path, value, extra) VALUES (?, ?, ?, ?);
 """
 
 INSERT_EVENT_SQL = """
@@ -38,8 +40,9 @@ class Storage:
             await db.commit()
 
     async def add_var(self, ts: str, path: str, value: float | None, extra: Dict[str, Any] | None = None):
+        extra_json = json.dumps(extra or {})  # <-- serialize para string
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(INSERT_VAR_SQL, (ts, path, value, (extra or {})))
+            await db.execute(INSERT_VAR_SQL, (ts, path, value, extra_json))
             await db.commit()
 
     async def add_event(self, ts: str, source: str, message: str, severity: int, category: str):

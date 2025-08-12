@@ -1,9 +1,10 @@
 from __future__ import annotations
+
 import asyncio
 import json
 import os
-from datetime import datetime
-from typing import Dict
+from datetime import datetime, timezone
+from typing import Dict, Any
 
 from asyncua import ua, Server
 from gmqtt import Client as MQTTClient
@@ -27,12 +28,58 @@ from .model import (
 from .storage import Storage
 from .lds import try_register_with_lds
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Utilidades
 # ──────────────────────────────────────────────────────────────────────────────
 
 def pct_over(value: float, nominal: float) -> float:
     return (value - nominal) / nominal
+
+
+# Normalizadores para aceitar tanto o formato do exercício quanto os exemplos do prof
+def _normalize_electrical_payload(data: dict) -> dict:
+    # Formato do professor (chaves capitalizadas e valores simples)
+    if any(k in data for k in ("Voltage", "Current", "Power")):
+        v = data.get("Voltage", 0.0)
+        i = data.get("Current", 0.0)
+        p = data.get("Power", 0.0)
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "voltage": {"a": v, "b": v, "c": v},
+            "current": {"a": i, "b": i, "c": i},
+            "power": {"active": p, "reactive": 0.0, "apparent": p},
+            "energy": {"active": 0.0, "reactive": 0.0, "apparent": 0.0},
+            "powerFactor": 0.95,
+            "frequency": 60.0,
+        }
+    # Já está no formato do exercício
+    return data
+
+
+def _normalize_environment_payload(data: dict) -> dict:
+    if any(k in data for k in ("Temperature", "Humidity", "CaseTemperature")):
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "temperature": data.get("Temperature", 0.0),
+            "humidity": data.get("Humidity", 0.0),
+            "caseTemperature": data.get("CaseTemperature", 0.0),
+        }
+    return data
+
+
+def _normalize_vibration_payload(data: dict) -> dict:
+    # Professor usa Accell_X/Y/Z — mapeamos para axial/radial
+    if any(k in data for k in ("Accell_X", "Accell_Y", "Accell_Z")):
+        ax = float(data.get("Accell_X", 0.0))
+        ry = float(data.get("Accell_Y", 0.0))
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "axial": ax,
+            "radial": ry,
+        }
+    return data
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Servidor OPC UA + Árvore de Nós
@@ -58,7 +105,7 @@ class MotorOPCUAServer:
         self.idx = None  # namespace index
 
         # Variáveis OPC UA (guardaremos refs p/ atualização)
-        self.vars: Dict[str, any] = {}
+        self.vars: Dict[str, Any] = {}
 
         # MQTT client
         self.mqtt: MQTTClient | None = None
@@ -68,6 +115,8 @@ class MotorOPCUAServer:
         await self.server.init()
         self.server.set_endpoint(self.endpoint)
         self.server.set_server_name(self.server_name)
+        # Ambiente de laboratório: apenas NoSecurity para evitar aviso de certificado
+        self.server.set_security_policy([ua.SecurityPolicyType.NoSecurity])
         self.idx = await self.server.register_namespace(self.ns_uri)
 
         # Address space root
@@ -135,7 +184,7 @@ class MotorOPCUAServer:
         await event.trigger()
         # Persistir histórico de eventos
         await self.storage.add_event(
-            ts=datetime.utcnow().isoformat(),
+            ts=datetime.now(timezone.utc).isoformat(),
             source=str(source_node.nodeid),
             message=message,
             severity=severity,
@@ -143,11 +192,11 @@ class MotorOPCUAServer:
         )
 
     async def start(self):
-        async with self.server as srv:
+        async with self.server:
             # MQTT loop como task concorrente
             await asyncio.gather(
                 self._mqtt_loop(),
-                self._heartbeat_task(srv.nodes.objects),
+                self._heartbeat_task(self.server.nodes.objects),
             )
 
     async def _heartbeat_task(self, source_node):
@@ -163,11 +212,19 @@ class MotorOPCUAServer:
     async def _mqtt_loop(self):
         client = MQTTClient(self.mqtt_client_id)
 
+        if self.mqtt_username and self.mqtt_password:
+            client.set_auth_credentials(self.mqtt_username, self.mqtt_password)
+
         def on_connect(c, flags, rc, properties):  # noqa: ANN001
             logger.info("MQTT conectado: {}:{}, rc={} flags={}", self.mqtt_host, self.mqtt_port, rc, flags)
+            # Assinar tópicos do exercício
             c.subscribe(TOPIC_ELEC)
             c.subscribe(TOPIC_ENV)
             c.subscribe(TOPIC_VIB)
+            # E também os do professor (compatibilidade)
+            c.subscribe("scgdi/sensor/electrical")
+            c.subscribe("scgdi/sensor/environment")
+            c.subscribe("scgdi/sensor/vibration")
 
         async def on_message(c, topic, payload, qos, properties):  # noqa: ANN001
             try:
@@ -176,22 +233,24 @@ class MotorOPCUAServer:
                 logger.warning("MQTT payload inválido em {}", topic)
                 return
 
-            if topic == TOPIC_ELEC:
+            if topic in (TOPIC_ELEC, "scgdi/sensor/electrical"):
+                data = _normalize_electrical_payload(data)
                 await self._handle_electrical(ElectricalPayload(**data))
-            elif topic == TOPIC_ENV:
+            elif topic in (TOPIC_ENV, "scgdi/sensor/environment"):
+                data = _normalize_environment_payload(data)
                 await self._handle_environment(EnvironmentPayload(**data))
-            elif topic == TOPIC_VIB:
+            elif topic in (TOPIC_VIB, "scgdi/sensor/vibration"):
+                data = _normalize_vibration_payload(data)
                 await self._handle_vibration(VibrationPayload(**data))
 
         client.on_connect = on_connect
         client.on_message = on_message
 
         self.mqtt = client
-        await client.connect(host=self.mqtt_host, port=self.mqtt_port, keepalive=60, ssl=None,
-                             username=(self.mqtt_username or None), password=(self.mqtt_password or None))
+        await client.connect(self.mqtt_host, self.mqtt_port, keepalive=60, ssl=None)
 
         try:
-            await client.subscribe("$SYS/#")  # opcional, debug
+            client.subscribe("$SYS/#")  # opcional, debug
             while True:
                 await asyncio.sleep(1)
         finally:
@@ -204,11 +263,33 @@ class MotorOPCUAServer:
     async def _set_and_store(self, name: str, ts: str, value: float, extra: Dict | None = None):
         node = self.vars[name]
         await node.write_value(value)
-        path = f"{MOTOR_NODE_NAME}." + \
-               ("Electrical." if name in {"VoltageA","VoltageB","VoltageC","CurrentA","CurrentB","CurrentC","PowerActive","PowerReactive","PowerApparent","EnergyActive","EnergyReactive","EnergyApparent","PowerFactor","Frequency"}
-                else "Environment." if name in {"Temperature","Humidity","CaseTemperature"}
-                else "Vibration.")
-        path += name
+        path = (
+            f"{MOTOR_NODE_NAME}."
+            + (
+                "Electrical."
+                if name
+                in {
+                    "VoltageA",
+                    "VoltageB",
+                    "VoltageC",
+                    "CurrentA",
+                    "CurrentB",
+                    "CurrentC",
+                    "PowerActive",
+                    "PowerReactive",
+                    "PowerApparent",
+                    "EnergyActive",
+                    "EnergyReactive",
+                    "EnergyApparent",
+                    "PowerFactor",
+                    "Frequency",
+                }
+                else "Environment."
+                if name in {"Temperature", "Humidity", "CaseTemperature"}
+                else "Vibration."
+            )
+            + name
+        )
         await self.storage.add_var(ts, path, value, extra)
 
     async def _handle_electrical(self, p: ElectricalPayload):
@@ -288,6 +369,7 @@ async def main():
     logger.info("OPC UA endpoint: {}", app.endpoint)
     logger.info("MQTT broker: {}:{}", app.mqtt_host, app.mqtt_port)
     await app.start()
+
 
 if __name__ == "__main__":
     try:
