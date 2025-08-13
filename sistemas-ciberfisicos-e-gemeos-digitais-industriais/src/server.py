@@ -11,6 +11,10 @@ from gmqtt import Client as MQTTClient
 from loguru import logger
 from dotenv import load_dotenv
 
+from asyncua.server.history_sql import HistorySQLite as UAHistorySQLite
+from .utils.net import free_port, split_endpoint
+
+
 from .model import (
     ElectricalPayload,
     EnvironmentPayload,
@@ -100,6 +104,13 @@ class MotorOPCUAServer:
         self.mqtt_password = os.getenv("MQTT_PASSWORD", "")
         self.mqtt_client_id = os.getenv("MQTT_CLIENT_ID", "scgdi-motor50cv")
 
+        self.opcua_manufacturer  = os.getenv("OPCUA_MANUFACTURER",  "Juliana LTDA")
+        self.opcua_product_name  = os.getenv("OPCUA_PRODUCT_NAME",  "jbl-opcua-server")
+        self.opcua_product_uri   = os.getenv("OPCUA_PRODUCT_URI",   "http://jbl.local/opcua")
+        self.opcua_app_uri       = os.getenv("OPCUA_APP_URI",       "urn:juliana:opcua-server")
+        self.opcua_sw_version    = os.getenv("OPCUA_SW_VERSION",    "1.0.0")
+        self.opcua_build_number  = os.getenv("OPCUA_BUILD_NUMBER",  "1")
+
         self.storage = Storage(self.db_path)
         self.server = Server()
         self.idx = None  # namespace index
@@ -115,6 +126,18 @@ class MotorOPCUAServer:
         await self.server.init()
         self.server.set_endpoint(self.endpoint)
         self.server.set_server_name(self.server_name)
+        await self.server.set_build_info(
+            product_uri=self.opcua_product_uri,
+            manufacturer_name=self.opcua_manufacturer,
+            product_name=self.opcua_product_name,
+            software_version=self.opcua_sw_version,
+            build_number=self.opcua_build_number,
+            build_date=datetime.now(timezone.utc),
+        )
+        await self.server.set_application_uri(self.opcua_app_uri)
+
+        # Opcional: sobrescrever o "Server Name" para incluir seu nome
+        self.server.set_server_name(f"{self.opcua_manufacturer} - {self.opcua_product_name}")
         # Ambiente de laboratório: apenas NoSecurity para evitar aviso de certificado
         self.server.set_security_policy([ua.SecurityPolicyType.NoSecurity])
         self.idx = await self.server.register_namespace(self.ns_uri)
@@ -158,7 +181,38 @@ class MotorOPCUAServer:
         for v in self.vars.values():
             await v.set_writable()
 
-        # Preparar tipo de evento customizado (simples)
+         # --- Habilitar histórico OPC UA (variáveis + eventos) ---
+        # 1) Configura storage de histórico nativo (SQLite) do asyncua
+        hist = UAHistorySQLite(self.db_path)
+        await hist.init()
+        self.server.iserver.history_manager.set_storage(hist)
+
+        # 2) Habilitar historização de DataChange para TODAS as variáveis do address space
+        for node in self.vars.values():
+            await self.server.iserver.enable_history_data_change(node)
+
+        # 3) Habilitar historização de EVENTOS
+        #    3.1 motor e Objects (como você já fazia)
+        await motor.set_event_notifier([ua.EventNotifier.SubscribeToEvents])
+        await self.server.iserver.enable_history_event(motor)
+        objects = self.server.nodes.objects
+        await objects.set_event_notifier([ua.EventNotifier.SubscribeToEvents])
+        await self.server.iserver.enable_history_event(objects)
+
+        #    3.2 Electrical/Environment/Vibration também devem gerar eventos
+        for src_node in (n_elec, n_env, n_vib):
+            await src_node.set_event_notifier([ua.EventNotifier.SubscribeToEvents])
+            await self.server.iserver.enable_history_event(src_node)
+
+        #    3.3 Mapa de fontes por categoria p/ usarmos no fire_event()
+        self.event_sources = {
+            "Electrical": n_elec,
+            "Environment": n_env,
+            "Vibration": n_vib,
+        }
+        # --- fim histórico ---
+
+        # Preparar tipo de evento customizado (necessário antes de disparar eventos)
         await self._prepare_event_type()
 
         # Tentativa de registro em LDS (se configurado)
@@ -177,27 +231,71 @@ class MotorOPCUAServer:
         )
 
     async def fire_event(self, source_node, category: str, message: str, severity: int):
-        event = await self.server.get_event_generator(self.evtype, source_node)
-        event.event.Severity = severity
-        event.event.Message = ua.LocalizedText(message)
-        event.event.Category = category
-        await event.trigger()
-        # Persistir histórico de eventos
+        """
+        Variáveis não têm EventNotifier. Se a fonte for variável,
+        emitimos pelo nó-objeto correspondente à categoria.
+        """
+        try:
+            node_class = await source_node.read_node_class()
+            if node_class == ua.NodeClass.Variable:
+                emitting = self.event_sources.get(category) or self.server.nodes.objects
+            else:
+                emitting = source_node
+
+            event = await self.server.get_event_generator(self.evtype, emitting)
+            event.event.Severity = severity
+            event.event.Message = ua.LocalizedText(message)
+            event.event.Category = category
+            await event.trigger()
+        except Exception as e:
+            logger.exception("Falha ao emitir evento (categoria=%s): %s", category, e)
+
+        # Persistimos mesmo que o trigger falhe, para debug
         await self.storage.add_event(
             ts=datetime.now(timezone.utc).isoformat(),
-            source=str(source_node.nodeid),
+            source=str((emitting if 'emitting' in locals() else source_node).nodeid),
             message=message,
             severity=severity,
             category=category,
         )
 
+
     async def start(self):
-        async with self.server:
-            # MQTT loop como task concorrente
-            await asyncio.gather(
-                self._mqtt_loop(),
-                self._heartbeat_task(self.server.nodes.objects),
-            )
+        async def _serve():
+            async with self.server:
+                await asyncio.gather(
+                    self._mqtt_loop(),
+                    self._heartbeat_task(self.server.nodes.objects),
+                )
+
+        try:
+            await _serve()
+        except OSError as e:
+            if getattr(e, "errno", None) != 98:  # 98 = address already in use
+                raise
+
+            # Porta ocupada: tenta portas seguintes
+            host, port, path = self.endpoint.replace("opc.tcp://", "").partition("/")[0].partition(":")[::2] + ("/" + self.endpoint.split("/", 3)[-1] if "/" in self.endpoint[10:] else "")
+            try:
+                port = int(port)  # type: ignore[assignment]
+            except Exception:
+                port = 4840
+
+            base_host = "0.0.0.0"  # bind all interfaces
+            for new_port in range(port + 1, port + 6):
+                new_ep = f"opc.tcp://{base_host}:{new_port}{path if isinstance(path, str) else ''}"
+                logger.warning("Porta %s ocupada. Tentando %s ...", port, new_ep)
+                self.server.set_endpoint(new_ep)
+                self.endpoint = new_ep
+                try:
+                    await _serve()
+                    return
+                except OSError as e2:
+                    if getattr(e2, "errno", None) == 98:
+                        continue
+                    raise
+            raise  # nenhuma porta disponível
+
 
     async def _heartbeat_task(self, source_node):
         # Emite evento informativo periódico para ver atividade
@@ -217,16 +315,23 @@ class MotorOPCUAServer:
 
         def on_connect(c, flags, rc, properties):  # noqa: ANN001
             logger.info("MQTT conectado: {}:{}, rc={} flags={}", self.mqtt_host, self.mqtt_port, rc, flags)
-            # Assinar tópicos do exercício
             c.subscribe(TOPIC_ELEC)
             c.subscribe(TOPIC_ENV)
             c.subscribe(TOPIC_VIB)
-            # E também os do professor (compatibilidade)
+
+            # Compatibilidade com variações usadas em aulas/exemplos
             c.subscribe("scgdi/sensor/electrical")
             c.subscribe("scgdi/sensor/environment")
             c.subscribe("scgdi/sensor/vibration")
 
+            # Variações em PT dos materiais do professor
+            c.subscribe("scgdi/sensor/energia")
+            c.subscribe("scgdi/sensor/ambiente")
+            c.subscribe("scgdi/sensor/vibracao")
+
         async def on_message(c, topic, payload, qos, properties):  # noqa: ANN001
+            if topic.startswith("$SYS/"):
+                return
             try:
                 data = json.loads(payload)
             except json.JSONDecodeError:
@@ -242,6 +347,15 @@ class MotorOPCUAServer:
             elif topic in (TOPIC_VIB, "scgdi/sensor/vibration"):
                 data = _normalize_vibration_payload(data)
                 await self._handle_vibration(VibrationPayload(**data))
+            elif topic == "scgdi/sensor/energia":
+                data = _normalize_electrical_payload(data)  # já está no formato do enunciado? passa reto
+                await self._handle_electrical(ElectricalPayload(**data))
+            elif topic == "scgdi/sensor/ambiente":
+                data = _normalize_environment_payload(data)
+                await self._handle_environment(EnvironmentPayload(**data))
+            elif topic == "scgdi/sensor/vibracao":
+                data = _normalize_vibration_payload(data)
+                await self._handle_vibration(VibrationPayload(**data))
 
         client.on_connect = on_connect
         client.on_message = on_message
@@ -250,7 +364,7 @@ class MotorOPCUAServer:
         await client.connect(self.mqtt_host, self.mqtt_port, keepalive=60, ssl=None)
 
         try:
-            client.subscribe("$SYS/#")  # opcional, debug
+           #  client.subscribe("$SYS/#")  # opcional, debug
             while True:
                 await asyncio.sleep(1)
         finally:
@@ -365,6 +479,14 @@ async def main():
         pass
 
     app = MotorOPCUAServer()
+
+    # Tenta liberar a porta do endpoint (mata instâncias antigas do *seu* server)
+    _, port, _ = split_endpoint(app.endpoint)
+    if free_port(port, name_hint="src.server"):
+        logger.info("Porta %s liberada (ou já estava livre).", port)
+    else:
+        logger.warning("Não consegui liberar a porta %s (talvez permissão). Vou tentar iniciar assim mesmo.", port)
+
     await app.init()
     logger.info("OPC UA endpoint: {}", app.endpoint)
     logger.info("MQTT broker: {}:{}", app.mqtt_host, app.mqtt_port)

@@ -1,8 +1,8 @@
-# Curso: Sistemas Ciberfísicos e Gêmeos Digitais Industriais
+# Sistemas Ciberfísicos e Gêmeos Digitais Industriais
 
 O curso aborda os **fundamentos da Indústria 4.0** com foco em **Gêmeos Digitais**, especialmente no modelo **AAS (Asset Administration Shell)**. Integra conceitos de **Computação e Engenharia** por meio de práticas com sensores, protocolos industriais (como **OPCUA** e **MQTT**), Python assíncrono e banco de dados **NoSQL**.
 
-## Objetivos do Curso
+## Objetivos
 - Compreender os fundamentos e aplicações de Sistemas Ciberfísicos e Gêmeos Digitais.
 - Desenvolver **modelos digitais representativos de ativos físicos**.
 - Explorar tecnologias emergentes aplicadas a contextos industriais.
