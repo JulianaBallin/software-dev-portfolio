@@ -10,6 +10,8 @@ from asyncua import ua, Server
 from gmqtt import Client as MQTTClient
 from loguru import logger
 from dotenv import load_dotenv
+from .storage import Storage
+from .lds import try_register_with_lds
 
 from asyncua.server.history_sql import HistorySQLite as UAHistorySQLite
 from .utils.net import free_port, split_endpoint
@@ -29,8 +31,6 @@ from .model import (
     TOPIC_VIB,
     MOTOR_NODE_NAME,
 )
-from .storage import Storage
-from .lds import try_register_with_lds
 
 
 # Utilidades

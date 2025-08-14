@@ -1,0 +1,40 @@
+# Checklist – Exercício Final SCGDI (professor × sua implementação)
+
+## Resumo
+Checklist dos requisitos do arquivo **scgdi/exercicio_final.md** confrontado com o que você implementou em **sistemas-ciberfisicos-e-gemeos-digitais-industriais**.
+
+### Legenda
+- **OK** = Atende completamente
+- **PARCIAL** = Atende em parte / requer ajuste
+- **FALTA** = Não encontrei evidência
+
+## Checklist de requisitos
+
+| Requisito | Status | Onde | Observações |
+|---|---|---|---|
+| Servidor OPC UA com árvore e variáveis conforme estrutura | OK | src/server.py → init() cria Motor50CV/Electrical/Environment/Vibration e variáveis | Estrutura alinhada ao enunciado; variáveis por fase e grupos. |
+| Regras de geração de eventos e alarmes | OK | src/server.py → handlers e _prepare_event_type() | ±10% tensão, +10% corrente, temperatura carcaça >60°C; heartbeat INFO periódico. |
+| Histórico de variáveis habilitado | OK | src/server.py → enable_history_data_change(...) | Além do histórico OPC UA, há persistência em SQLite (src/storage.py). |
+| Histórico de eventos habilitado | OK | src/server.py → enable_history_event(...) | Eventos também persistidos em SQLite (event_history). |
+| Nodeset personalizado | OK | src/server.py → _prepare_event_type() cria SCGDIEventType | Tipo de evento custom implementado. Não vi import de NodeSet XML. |
+| Integração com broker MQTT remoto (lse.dev.br) | OK (configurável) | src/server.py (cliente) / src/publisher.py (simulador) | Servidor usa host do .env (default localhost); publisher já aponta p/ lse.dev.br. Defina MQTT_HOST=lse.dev.br. |
+| Tópicos e formato JSON conforme enunciado | OK | src/model.py (TOPIC_* e modelos); src/server.py normalizadores; src/publisher.py geradores | Os três tópicos estão cobertos; modelos são compatíveis. |
+
+## Cobertura da árvore de nós
+**Electrical** — Status: OK
+
+- Variáveis encontradas: `VoltageA, VoltageB, VoltageC, CurrentA, CurrentB, CurrentC, PowerActive, PowerReactive, PowerApparent, EnergyActive, EnergyReactive, EnergyApparent, PowerFactor, Frequency`
+
+**Environment** — Status: OK
+
+- Variáveis encontradas: `Temperature, Humidity, CaseTemperature`
+
+**Vibration** — Status: OK
+
+- Variáveis encontradas: `Axial, Radial`
+
+
+## Tópicos MQTT e formatos
+- Esperados: `scgdi/motor/electrical`, `scgdi/motor/environment`, `scgdi/motor/vibration`
+- Implementados: `TOPIC_ELEC`, `TOPIC_ENV`, `TOPIC_VIB` em `src/model.py`
+- `src/server.py` assina e normaliza payloads; `src/publisher.py` publica payloads sintéticos compatíveis.
