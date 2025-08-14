@@ -1,11 +1,10 @@
-# src/history_mongo.py
+
 from __future__ import annotations
 
 from typing import Any, List, Optional
 from datetime import datetime, timezone
 
 try:
-    # A interface pode mudar entre versões; usamos fallback se não existir.
     from asyncua.server.history import HistoryStorageInterface  # type: ignore
 except Exception:  # pragma: no cover
     HistoryStorageInterface = object  # type: ignore[misc,assignment]
@@ -19,12 +18,11 @@ class HistoryMongoDB(HistoryStorageInterface):  # type: ignore[misc]
     def __init__(self, server: Any) -> None:
         self.server = server
 
-    # Métodos assíncronos "no-op" (assinaturas genéricas para manter compat)
+
     async def initialize(self) -> None:
         return
 
     async def add_node_value(self, node: Any, datavalue: Any) -> None:
-        # Aqui, numa implementação real, gravaria o valor no MongoDB.
         return
 
     async def read_node_history(

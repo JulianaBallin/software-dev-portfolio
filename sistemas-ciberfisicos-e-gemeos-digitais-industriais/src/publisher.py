@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 
 from gmqtt import Client as MQTTClient
 
-# Configs (use as mesmas do .env para não confundir)
 MQTT_HOST = os.getenv("MQTT_HOST", "lse.dev.br")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_USERNAME = os.getenv("MQTT_USERNAME") or None
@@ -28,13 +27,10 @@ class MQTTChannel:
         self.client.on_disconnect = self.on_disconnect
         self.client.on_subscribe = self.on_subscribe
 
-    # Callbacks (opcionales para debug)
     def on_connect(self, client, flags, rc, properties):
-        # Não precisamos assinar nada aqui; só publicamos.
         print(f"[MQTT] conectado em {MQTT_HOST}:{MQTT_PORT} rc={rc}")
 
     def on_message(self, client, topic, payload, qos, properties):
-        # Se assinar algo, debug aqui
         pass
 
     def on_disconnect(self, client, packet, exc=None):
@@ -48,7 +44,6 @@ class MQTTChannel:
             self.client.set_auth_credentials(MQTT_USERNAME, MQTT_PASSWORD)
         await self.client.connect(MQTT_HOST, MQTT_PORT)
 
-    # ------- Publishers nos formatos do exercício -------
     async def send_electrical(self):
         # Envia a cada ~5s
         while True:

@@ -33,17 +33,12 @@ from .storage import Storage
 from .lds import try_register_with_lds
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Utilidades
-# ──────────────────────────────────────────────────────────────────────────────
 
 def pct_over(value: float, nominal: float) -> float:
     return (value - nominal) / nominal
 
-
-# Normalizadores para aceitar tanto o formato do exercício quanto os exemplos do prof
 def _normalize_electrical_payload(data: dict) -> dict:
-    # Formato do professor (chaves capitalizadas e valores simples)
     if any(k in data for k in ("Voltage", "Current", "Power")):
         v = data.get("Voltage", 0.0)
         i = data.get("Current", 0.0)
@@ -57,7 +52,6 @@ def _normalize_electrical_payload(data: dict) -> dict:
             "powerFactor": 0.95,
             "frequency": 60.0,
         }
-    # Já está no formato do exercício
     return data
 
 
@@ -73,7 +67,6 @@ def _normalize_environment_payload(data: dict) -> dict:
 
 
 def _normalize_vibration_payload(data: dict) -> dict:
-    # Professor usa Accell_X/Y/Z — mapeamos para axial/radial
     if any(k in data for k in ("Accell_X", "Accell_Y", "Accell_Z")):
         ax = float(data.get("Accell_X", 0.0))
         ry = float(data.get("Accell_Y", 0.0))
@@ -85,9 +78,7 @@ def _normalize_vibration_payload(data: dict) -> dict:
     return data
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Servidor OPC UA + Árvore de Nós
-# ──────────────────────────────────────────────────────────────────────────────
 
 class MotorOPCUAServer:
     def __init__(self):
@@ -115,7 +106,7 @@ class MotorOPCUAServer:
         self.server = Server()
         self.idx = None  # namespace index
 
-        # Variáveis OPC UA (guardaremos refs p/ atualização)
+        # Variáveis OPC UA
         self.vars: Dict[str, Any] = {}
 
         # MQTT client
@@ -136,19 +127,18 @@ class MotorOPCUAServer:
         )
         await self.server.set_application_uri(self.opcua_app_uri)
 
-        # Opcional: sobrescrever o "Server Name" para incluir seu nome
         self.server.set_server_name(f"{self.opcua_manufacturer} - {self.opcua_product_name}")
-        # Ambiente de laboratório: apenas NoSecurity para evitar aviso de certificado
+    
         self.server.set_security_policy([ua.SecurityPolicyType.NoSecurity])
         self.idx = await self.server.register_namespace(self.ns_uri)
 
-        # Address space root
+       
         objects = self.server.nodes.objects
 
         # Nó raiz do motor
         motor = await objects.add_object(self.idx, MOTOR_NODE_NAME)
 
-        # Subnós conforme enunciado
+        # Subnós
         # Electrical
         n_elec = await motor.add_object(self.idx, "Electrical")
         self.vars["VoltageA"] = await n_elec.add_variable(self.idx, "VoltageA", 0.0)
@@ -303,9 +293,8 @@ class MotorOPCUAServer:
             await self.fire_event(source_node, "status", "heartbeat", SEVERITY["INFO"])
             await asyncio.sleep(30)
 
-    # ──────────────────────────────────────────────────────────────────────
+
     # MQTT
-    # ──────────────────────────────────────────────────────────────────────
 
     async def _mqtt_loop(self):
         client = MQTTClient(self.mqtt_client_id)
@@ -319,12 +308,12 @@ class MotorOPCUAServer:
             c.subscribe(TOPIC_ENV)
             c.subscribe(TOPIC_VIB)
 
-            # Compatibilidade com variações usadas em aulas/exemplos
+   
             c.subscribe("scgdi/sensor/electrical")
             c.subscribe("scgdi/sensor/environment")
             c.subscribe("scgdi/sensor/vibration")
 
-            # Variações em PT dos materiais do professor
+      
             c.subscribe("scgdi/sensor/energia")
             c.subscribe("scgdi/sensor/ambiente")
             c.subscribe("scgdi/sensor/vibracao")
@@ -348,7 +337,7 @@ class MotorOPCUAServer:
                 data = _normalize_vibration_payload(data)
                 await self._handle_vibration(VibrationPayload(**data))
             elif topic == "scgdi/sensor/energia":
-                data = _normalize_electrical_payload(data)  # já está no formato do enunciado? passa reto
+                data = _normalize_electrical_payload(data)  
                 await self._handle_electrical(ElectricalPayload(**data))
             elif topic == "scgdi/sensor/ambiente":
                 data = _normalize_environment_payload(data)
@@ -364,15 +353,15 @@ class MotorOPCUAServer:
         await client.connect(self.mqtt_host, self.mqtt_port, keepalive=60, ssl=None)
 
         try:
-           #  client.subscribe("$SYS/#")  # opcional, debug
+           #  client.subscribe("$SYS/#")  # debug
             while True:
                 await asyncio.sleep(1)
         finally:
             await client.disconnect()
 
-    # ──────────────────────────────────────────────────────────────────────
+  
     # Handlers de atualização de variáveis + regras de eventos/alarmes
-    # ──────────────────────────────────────────────────────────────────────
+    
 
     async def _set_and_store(self, name: str, ts: str, value: float, extra: Dict | None = None):
         node = self.vars[name]
@@ -461,17 +450,14 @@ class MotorOPCUAServer:
         ts = p.timestamp
         await self._set_and_store("Axial", ts, p.axial)
         await self._set_and_store("Radial", ts, p.radial)
-        # Exemplo de evento 'baixo' (ajuste a regra se quiser)
         if max(p.axial, p.radial) > 0.2:
             await self.fire_event(self.vars["Axial"], "Vibration", "Slight vibration increase", SEVERITY["LOW"])
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+
 # Entry point
-# ──────────────────────────────────────────────────────────────────────────────
 
 async def main():
-    # uvloop (Linux) para melhor desempenho
     try:
         import uvloop  # type: ignore
         uvloop.install()
@@ -480,7 +466,7 @@ async def main():
 
     app = MotorOPCUAServer()
 
-    # Tenta liberar a porta do endpoint (mata instâncias antigas do *seu* server)
+    # Tenta liberar a porta do endpoint
     _, port, _ = split_endpoint(app.endpoint)
     if free_port(port, name_hint="src.server"):
         logger.info("Porta %s liberada (ou já estava livre).", port)
