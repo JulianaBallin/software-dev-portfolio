@@ -2,7 +2,6 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 from typing import Dict, Optional
 
-# Tópicos e payloads (pydantic) conforme enunciado
 
 class ElectricalPayload(BaseModel):
     timestamp: str
@@ -24,7 +23,6 @@ class VibrationPayload(BaseModel):
     axial: float
     radial: float
 
-# Severidades conforme tabela do enunciado
 SEVERITY = {
     "INFO": 100,
     "LOW": 250,
@@ -33,13 +31,12 @@ SEVERITY = {
     "CRIT": 900,
 }
 
-# Valores nominais (ajuste conforme seu caso)
-NOMINAL_VOLTAGE = 220.0  # V
-NOMINAL_CURRENT = 10.0   # A (estimativa para regras)
+NOMINAL_VOLTAGE = 220.0 
+NOMINAL_CURRENT = 10.0   
 
 # Limites para alarmes
-OVER_UNDER_TOL = 0.10  # ±10%
-CASE_TEMP_CRIT = 60.0  # °C
+OVER_UNDER_TOL = 0.10  
+CASE_TEMP_CRIT = 60.0 
 
 # Nomes de tópicos
 TOPIC_ELEC = "scgdi/motor/electrical"

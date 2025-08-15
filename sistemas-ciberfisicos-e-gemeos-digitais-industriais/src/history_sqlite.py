@@ -1,4 +1,4 @@
-# src/history_sqlite.py
+
 from __future__ import annotations
 from typing import Any, Optional, List, Tuple
 from datetime import datetime
@@ -7,9 +7,9 @@ from asyncua import ua
 try:
     from asyncua.server.history import HistoryStorageInterface  # type: ignore
 except Exception:
-    HistoryStorageInterface = object  # fallback para versões diferentes
+    HistoryStorageInterface = object 
 
-class HistorySQLite(HistoryStorageInterface):  # type: ignore[misc]
+class HistorySQLite(HistoryStorageInterface):  
     def __init__(self, db_path: str):
         self.db_path = db_path
 
@@ -26,7 +26,6 @@ class HistorySQLite(HistoryStorageInterface):  # type: ignore[misc]
         Mapeia pelo caminho 'path' que você salva no SQLite.
         """
         browse_name = await node.read_browse_name()
-        # ajuste se quiser caminho completo; aqui usa só o BrowseName:
         path = browse_name.Name
 
         query = """

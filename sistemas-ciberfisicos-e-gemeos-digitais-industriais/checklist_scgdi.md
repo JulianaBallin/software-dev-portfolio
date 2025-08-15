@@ -1,4 +1,4 @@
-# Checklist – Exercício Final SCGDI (professor × sua implementação)
+# Checklist – Exercício Final SCGDI
 
 ## Resumo
 Checklist dos requisitos do arquivo **scgdi/exercicio_final.md** confrontado com o que você implementou em **sistemas-ciberfisicos-e-gemeos-digitais-industriais**.
